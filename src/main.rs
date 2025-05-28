@@ -18,7 +18,9 @@ enum Action {
 
 
 fn sleep_ms(ms: u32) {
-    sleep(Duration::from_millis(u64::from(ms)));
+    if std::env::var("NS").is_err() {
+        sleep(Duration::from_millis(u64::from(ms)));
+    }
 }
 
 
@@ -75,6 +77,7 @@ fn play(mut bet: u64) -> i64 {
         sleep_ms(187);
     };
 
+    player_sum = get_card_sum(&player_cards);
     if player_sum > 21 {
         println!("Your Sum: {} | Your Cards: {}", player_sum, fmt_cards(&player_cards));
         println!("{}", format!("You busted with a sum of {player_sum} and lost {bet}$!").red());
