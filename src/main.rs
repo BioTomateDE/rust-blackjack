@@ -1,14 +1,16 @@
 mod card;
+mod deck;
 mod input;
 
-use std::io::{BufRead, Write};
-use std::thread::sleep;
-use std::time::Duration;
+use crate::card::{Deck, Hand};
+use crate::input::{get_action_input, get_bet};
+use colored::Colorize;
 use rand::prelude::IndexedRandom;
 use rand::rng;
-use colored::Colorize;
-use crate::card::{fmt_cards, gen_deck, get_card_sum, Card};
-use crate::input::{get_action_input, get_bet};
+use std::cmp::Ordering;
+use std::io::BufRead;
+use std::thread::sleep;
+use std::time::Duration;
 
 enum Action {
     Stand,
@@ -16,126 +18,159 @@ enum Action {
     Double,
 }
 
-
-fn sleep_ms(ms: u32) {
-    if std::env::var("NS").is_err() {
-        sleep(Duration::from_millis(u64::from(ms)));
+fn sleep_ms(ms: u64) {
+    if std::env::args().nth(1).as_deref() == Some("nosleep") {
+        return;
     }
+    let sleep_mode = std::env::var("BJ_SLEEP").unwrap_or_default();
+    match sleep_mode.as_str() {
+        "disabled" | "0" | "false" => return,
+        _ => {}
+    }
+    sleep(Duration::from_millis(ms));
 }
 
-
-/// returns the money gained (can be negative if lost)
+/// Returns the money gained (can be negative if lost).
 fn play(mut bet: u64) -> i64 {
-    let mut deck: Vec<Card> = gen_deck();
-
-    let mut dealer_cards: Vec<Card> = vec![deck.pop().unwrap(), deck.pop().unwrap()];
-    let mut player_cards: Vec<Card> = vec![deck.pop().unwrap(), deck.pop().unwrap()];
+    let mut deck = Deck::new();
+    let mut dealer_cards = Hand::new(deck.pop_card(), deck.pop_card());
+    let mut player_cards = Hand::new(deck.pop_card(), deck.pop_card());
 
     sleep_ms(230);
-    println!("Dealer Upcard: {}\n", dealer_cards[0]);
+    println!("Dealer Upcard: {}", dealer_cards.upcard());
+    player_cards.print_info("Your");
+    println!();
 
-    let mut player_sum: u8 = get_card_sum(&player_cards);
-    let mut dealer_sum: u8 = get_card_sum(&dealer_cards);
-
-    if player_sum == 21 {
+    // Player Blackjack; 3/2 payout.
+    if player_cards.sum() == 21 {
         let payout: i64 = bet as i64 * 3 / 2;
-        println!("Your Sum: {} | Your Cards: {}", player_sum, fmt_cards(&player_cards));
         println!("You won {payout}$ by getting a blackjack!");
-        return payout
+        return payout;
     }
 
-    if dealer_sum == 21 {
-        println!("Dealer Sum: {} | Dealer Cards: {}", dealer_sum, fmt_cards(&dealer_cards));
+    // Dealer Blackjack.
+    if dealer_cards.sum() == 21 {
+        dealer_cards.print_info("Dealer");
         println!("You lost {bet}$ because the dealer has a blackjack!");
-        return -(bet as i64)
+        return -(bet as i64);
     }
 
-    while player_sum <= 21 {
-        println!("Your Sum: {} | Your Cards: {}", player_sum, fmt_cards(&player_cards));
-
-        if player_sum == 21 {
-            println!("Your Sum: {} | Your Cards: {}", player_sum, fmt_cards(&player_cards));
-            break
-        }
-
-        let action: Action = get_action_input(player_cards.len() <= 2);
+    // Player action input until stand, double, 21 or busted.
+    while player_cards.sum() < 21 {
+        let double_allowed: bool = player_cards.count() == 2;
+        let action: Action = get_action_input(double_allowed);
 
         match action {
             Action::Stand => {
-                println!("You stood on {player_sum}.");
-                break
-            },
-            Action::Hit => player_cards.push(deck.pop().unwrap()),
+                println!("You stood on {}.", player_cards.sum());
+                break;
+            }
+            Action::Hit => player_cards.push_card(deck.pop_card()),
             Action::Double => {
-                player_cards.push(deck.pop().unwrap());
-                println!("Your Sum: {} | Your Cards: {}", player_sum, fmt_cards(&player_cards));
+                player_cards.push_card(deck.pop_card());
+                player_cards.print_info("Your");
                 bet *= 2;
                 break;
             }
         }
-        player_sum = get_card_sum(&player_cards);
         sleep_ms(187);
-    };
+        player_cards.print_info("Your");
+    }
 
-    player_sum = get_card_sum(&player_cards);
-    if player_sum > 21 {
-        println!("Your Sum: {} | Your Cards: {}", player_sum, fmt_cards(&player_cards));
-        println!("{}", format!("You busted with a sum of {player_sum} and lost {bet}$!").red());
+    // Player busted.
+    let sum: u8 = player_cards.sum();
+    if sum > 21 {
+        let message = format!("You busted with a sum of {sum} and lost {bet}$!");
+        println!("{}", message.red());
         return -(bet as i64);
     }
 
-    sleep_ms(321);
+    sleep_ms(320);
+    dealer_cards.print_info("Dealer");
 
-    while dealer_sum < 17 {
-        dealer_cards.push(deck.pop().unwrap());
-        dealer_sum = get_card_sum(&dealer_cards);
-        print!("Dealer Sum: {} | Dealer Cards: {}\r", dealer_sum, fmt_cards(&dealer_cards));
-        std::io::stdout().flush().unwrap();
-        sleep_ms(806);
+    // Dealer draws cards until they have a sum of 17 or higher.
+    while dealer_cards.sum() < 17 {
+        sleep_ms(800);
+        dealer_cards.push_card(deck.pop_card());
+        dealer_cards.print_info("Dealer");
     }
-    println!("Dealer Sum: {} | Dealer Cards: {}", dealer_sum, fmt_cards(&dealer_cards));
 
-    if dealer_sum > 21 {
-        println!("{}", format!("You won {bet}$ because the dealer busted with a sum of {dealer_sum}!").green());
+    // Dealer busted.
+    let sum: u8 = dealer_cards.sum();
+    if sum > 21 {
+        let msg = format!("You won {bet}$ because the dealer busted with a sum of {sum}!");
+        println!("{}", msg.bright_green());
         return bet as i64;
     }
-    sleep_ms(533);
+    sleep_ms(530);
 
-    if player_sum > dealer_sum {
-        println!("{}", format!("You won {bet}$ by having a higher sum than the dealer ({} > {})!", player_sum, dealer_sum).green());
-        bet as i64
-    }
-    else if player_sum == dealer_sum {
-        println!("{}", format!("You pushed by having the same sum as the dealer ({}).", player_sum).yellow());
-        0
-    }
-    else {
-        println!("{}", format!("You lost {bet}$ by having a lower sum than the dealer ({} < {}).", player_sum, dealer_sum).red());
-        -(bet as i64)
+    let player_sum: u8 = player_cards.sum();
+    let dealer_sum: u8 = dealer_cards.sum();
+
+    match player_sum.cmp(&dealer_sum) {
+        Ordering::Less => {
+            let msg = format!(
+                "You lost {}$ by having a lower card sum than the dealer ({} < {}).",
+                bet, player_sum, dealer_sum,
+            );
+            println!("{}", msg.red());
+            -(bet as i64)
+        }
+        Ordering::Equal => {
+            let msg = format!(
+                "You pushed by having the same card sum as the dealer ({}).",
+                player_sum
+            );
+            println!("{}", msg.yellow());
+            0
+        }
+        Ordering::Greater => {
+            let msg = format!(
+                "You won {}$ by having a higher card sum than the dealer ({} > {})!",
+                bet, player_sum, dealer_sum,
+            );
+            println!("{}", msg.bright_green());
+            bet as i64
+        }
     }
 }
 
-
+const HEADER: &str = "=============== Blackjack ===============";
+const OBJECTS_TO_SELL: &[&str] = &[
+    "car",
+    "house",
+    "truck",
+    "computer",
+    "phone",
+    "jewelry",
+    "furniture",
+    "pokemon cards",
+    "lawnmower",
+    "air fryer",
+];
 
 fn main() {
     let mut balance: i64 = 1000;
 
     loop {
-        println!("{}", "=============== Blackjack ===============".bright_magenta());
+        println!("{}", HEADER.bright_magenta());
         println!("Your balance: {}$", balance);
-        let bet: u64 = get_bet(balance as u64);     // cast is fine because the loop will break if balance <= 0
+        let bet: u64 = get_bet(balance as u64);
         let money_gained: i64 = play(bet);
         balance += money_gained;
-        if balance <= 0 {
-            break
+        if balance < 2 {
+            break;
         }
         println!("{}", "[Press ENTER to restart]".white());
-        let _ = std::io::stdin().lock().read_line(&mut String::new());
+        std::io::stdin()
+            .lock()
+            .read_line(&mut String::new())
+            .unwrap();
     }
 
     sleep_ms(723);
-    let objects_to_sell: [&str; 10] = ["car", "house", "truck", "computer", "phone", "jewelry", "furniture", "pokemon cards", "lawnmower", "air fryer"];
-    let object_to_sell: &str = objects_to_sell.choose(&mut rng()).unwrap();
-    println!("{}", format!("You gambled away all your money! Time to sell your {object_to_sell}...").red());
-}
 
+    let obj: &str = OBJECTS_TO_SELL.choose(&mut rng()).unwrap();
+    let msg = format!("You gambled away all your money! Time to sell your {obj}...");
+    println!("{}", msg.red());
+}
